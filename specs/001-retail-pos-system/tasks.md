@@ -62,7 +62,7 @@ Web application structure per [plan.md](./plan.md): `backend/src/`, `frontend/sr
 - [ ] T019 Write failing table-driven refund tests in `shared/tests/refund.test.ts` covering pro-rata refund of discounted price actually paid, return-window eligibility, over-return rejection, and already-returned-quantity tracking
 - [ ] T020 Implement refund eligibility and amount computation in `shared/domain/refund.ts` (makes T019 pass)
 - [ ] T021 Write failing money-invariant suite in `shared/tests/invariants.test.ts` asserting `sum(lines) − cartDiscounts + tax = total` and `sum(tenders) − change = total` across generated carts (property-based)
-- [ ] T022 [P] Define Zod schemas for all entities in `shared/types/entities.ts` per data-model.md (Product, Category, TaxRule, StockMovement, Sale, SaleLine, Tender, Refund, RefundLine, Discount, Customer, User, AuditEntry)
+- [ ] T022 [P] Define Zod schemas for all entities in `shared/types/entities.ts` per data-model.md (Product, Category, TaxRule, StockMovement, Sale, SaleLine, Tender, Refund, RefundLine, Discount, Customer, User, Shift, CashMovement, ParkedCart, StoreSettings, AuditEntry)
 - [ ] T023 [P] Define Zod schemas for sync API requests/responses in `shared/types/sync.ts` per contracts/sync-api.md
 - [ ] T024 [P] Define peripheral port interfaces in `shared/ports/peripherals.ts` per contracts/peripheral-ports.md (ReceiptPrinterPort, BarcodeScannerPort, CashDrawerPort, CardTerminalPort, CustomerDisplayPort, PeripheralStatus)
 
@@ -410,6 +410,48 @@ Web application structure per [plan.md](./plan.md): `backend/src/`, `frontend/sr
 
 ---
 
+## Phase 14: Clarification Completion — Shifts, Recovery, Overrides, and Retention
+
+**Purpose**: Complete capabilities added by the 2026-08-29 clarification session.
+
+### Tests — WRITE FIRST and observe failure
+
+- [ ] T191 [P] Write failing drawer-invariant tests in `shared/tests/drawer.test.ts` covering expected cash, variance sign, card exclusion, cash drops, payouts, and zero/boundary cases
+- [ ] T192 [P] Write failing whole-unit quantity tests in `shared/tests/quantity.test.ts` rejecting fractional, zero, and negative quantities on cart, sale, and refund lines
+- [ ] T193 [P] Write failing shift lifecycle tests in `backend/tests/unit/shift.test.ts` covering open, one-open-shift-per-terminal, cash-sale gating, close count, Z-report, and manager-only reopen
+- [ ] T194 [P] Write failing cash movement tests in `backend/tests/unit/cash-movement.test.ts` covering drops, payouts, reasons, audit entries, and offline event payloads
+- [ ] T195 [P] Write failing parked-cart persistence tests in `frontend/tests/unit/parked-cart.test.ts` covering restart survival, no stock/financial effect, and stale-cart review age
+- [ ] T196 [P] Write failing parked-cart concurrency tests in `backend/tests/integration/parked-cart-lock.test.ts` covering cross-terminal retrieval, exclusive resume, lock expiry, and `409 CART_IN_USE`
+- [ ] T197 [P] Write failing price-override tests in `shared/tests/price-override.test.ts` covering manager authentication, required reason, before/after values, discount distinction, and refund price
+- [ ] T198 [P] Write failing retention tests in `backend/tests/unit/retention.test.ts` covering configurable financial retention, inactivity-based PII anonymization, and immutable sales
+- [ ] T199 [P] Write failing customer-export tests in `backend/tests/contract/customer-export.test.ts` covering machine-readable output and `CUSTOMER_EXPORT` audit entry
+- [ ] T200 [P] Write failing shift/parked-cart E2E tests in `frontend/tests/e2e/shift-and-cart-recovery.spec.ts` for quickstart Scenarios 8 and 9
+- [ ] T201 [P] Write failing price-override E2E test in `frontend/tests/e2e/price-override.spec.ts` for quickstart Scenario 10
+
+### Implementation
+
+- [ ] T202 Implement drawer expected-cash and variance computation in `shared/domain/drawer.ts` and add the drawer invariant to `shared/tests/invariants.test.ts` (makes T191 pass)
+- [ ] T203 Implement integer quantity validation in `shared/domain/quantity.ts` and wire it into `shared/types/entities.ts` (makes T192 pass)
+- [ ] T204 Implement Shift, CashMovement, ParkedCart, and StoreSettings models in `backend/prisma/schema.prisma`, including append-only constraints and retention fields (makes T193–T196, T198 pass)
+- [ ] T205 Implement shift lifecycle service in `backend/src/services/shift.ts` with open/close/reopen, cash-sale gating, ledger-derived Z-report, and audit events (makes T193 pass)
+- [ ] T206 Implement cash movement service in `backend/src/services/cash-movement.ts` for drops, payouts, and no-sale opens with offline queue support (makes T194 pass)
+- [ ] T207 Implement shift endpoints in `backend/src/api/shifts.ts` for current shift, open, close, report, and manager-authenticated reopen (makes T193 pass)
+- [ ] T208 Implement shift UI in `frontend/src/pages/Shifts.tsx` for opening float, cash movements, counted close, variance, and Z-report
+- [ ] T209 Implement parked-cart repository and service in `frontend/src/stores/parked-carts.ts` with restart persistence and cross-terminal sync (makes T195 pass)
+- [ ] T210 Implement parked-cart endpoints in `backend/src/api/parked-carts.ts` with lease-based exclusive resume locking and expired-lock recovery (makes T196 pass)
+- [ ] T211 Implement parked-cart UI in `frontend/src/components/ParkedCarts.tsx` for park, list, retrieve, and in-use errors
+- [ ] T212 Implement manager price override service in `frontend/src/services/price-override.ts` and API route in `backend/src/api/price-overrides.ts`, recording before/after audit values and preserving overridden price for refunds (makes T197 pass)
+- [ ] T213 Implement price-override controls in `frontend/src/components/PriceOverride.tsx` with manager authentication, required reason, and distinct receipt labeling (makes T201 pass)
+- [ ] T214 Implement configurable retention settings in `backend/src/api/settings.ts` and `frontend/src/pages/Settings.tsx` with defaults of 7 financial-record years and 2 PII-inactivity years (makes T198 pass)
+- [ ] T215 Implement scheduled PII anonymization job in `backend/src/services/pii-retention.ts`, preserving ledger records and emitting `PII_ANONYMIZED` audit entries (makes T198 pass)
+- [ ] T216 Implement customer data export endpoint and UI in `backend/src/api/customer-export.ts` and `frontend/src/components/CustomerExport.tsx`, emitting `CUSTOMER_EXPORT` audit entries (makes T199 pass)
+- [ ] T217 Extend `frontend/src/services/sync/push.ts` and `backend/src/api/sync.ts` for shift open/close, cash movement, parked-cart, and retention-related event types (makes T194 and T196 pass)
+- [ ] T218 Run quickstart Scenarios 8–10 and record results in `quickstart.md` validation output (makes T200, T201 pass)
+
+**Checkpoint**: All clarification-derived requirements are implemented, tested, and auditable.
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -424,10 +466,11 @@ Web application structure per [plan.md](./plan.md): `backend/src/`, `frontend/sr
   - P2 and P3 stories are independent of each other once Foundational is done
 - **Sync Hardening (Phase 12)**: Depends on US1 (needs a real sale flow to sync); should complete before release
 - **Polish (Phase 13)**: Depends on all desired user stories being complete
+- **Clarification Completion (Phase 14)**: Depends on Foundational and the relevant user-story foundations; its shift, drawer, parked-cart, override, and retention capabilities complete the refreshed design after Phase 13 and before final release validation
 
 ### User Story Dependencies
 
-- **US1 (P1)**: Depends only on Foundational — the MVP
+- **US1 (P1)**: Depends on Foundational and the shift-gating tasks T191, T193, T194, T202, and T205–T208 — the MVP requires an open shift before cash sale completion
 - **US2 (P1)**: Depends on US1 (extends tender flow with card and split)
 - **US3 (P1)**: Depends on US1 (refunds require completed sales to refund)
 - **US4 (P2)**: Depends on Foundational only — independently testable
@@ -436,6 +479,7 @@ Web application structure per [plan.md](./plan.md): `backend/src/`, `frontend/sr
 - **US7 (P3)**: Depends on Foundational; receipt-less return (T141) feeds US3's refund flow
 - **US8 (P3)**: Depends on Foundational; reports are richer once US1–US6 generate data
 - **US9 (P3)**: Depends on Foundational; RBAC middleware (T161) should land early if multiple developers work in parallel
+- **Clarification Completion (Phase 14)**: T191–T203 can proceed after shared foundations; T204–T218 depend on the relevant failing tests and must complete before final release validation
 
 ### Within Each User Story
 
@@ -452,6 +496,7 @@ Web application structure per [plan.md](./plan.md): `backend/src/`, `frontend/sr
 - All CI gate tasks (T046–T051) run in parallel
 - Within each user story, all test tasks marked [P] can be written together, then all model/UI tasks marked [P] implemented together
 - After Foundational, US4, US5, US6, US7, US8, and US9 can each be owned by a different developer
+- Phase 14 test tasks T191–T201 can be written in parallel; implementation pairs must follow each failing test and can be split by domain (drawer/quantity, shifts, parked carts, overrides, retention)
 
 ---
 
