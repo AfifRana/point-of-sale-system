@@ -1,0 +1,171 @@
+# Sync API Contract
+
+**Feature**: 001-retail-pos-system | **Version**: 1.0
+
+REST API between POS terminals and the server. Base URL: `/api/v1`. All bodies are JSON,
+validated by shared Zod schemas. All money fields are integer minor units with ISO 4217
+currency. All timestamps are ISO 8601 UTC.
+
+**Idempotency**: every mutating request carries a client-generated `idempotencyKey`
+(UUID). A retried request with a known key returns the original result with
+`X-Idempotent-Replay: true` — never a duplicate effect (Constitution Principle I).
+
+**Authorization**: `Authorization: Bearer <sessionToken>`. Roles: ADMIN, MANAGER,
+CASHIER. Server-side deny-by-default; each endpoint lists its minimum role.
+
+---
+
+## Authentication
+
+### POST /auth/login
+
+Password login (admin/manager).
+
+```json
+{ "username": "string", "password": "string" }
+```
+
+→ `200 { "sessionToken": "string", "user": { "id": "uuid", "role": "ADMIN|MANAGER" } }`
+→ `401` invalid credentials · `429` rate-limited (5 failures → 15 min lockout)
+
+### POST /auth/pin
+
+PIN login (cashier, shared terminal quick-switch).
+
+```json
+{ "pin": "6-8 digits" }
+```
+
+→ `200 { "sessionToken": "string", "user": { "id": "uuid", "role": "CASHIER" } }`
+→ `401` · `429` (same lockout policy)
+
+### POST /auth/override
+
+Manager override for sensitive operations. Authenticates the **manager**, not the
+cashier (FR-052).
+
+```json
+{ "managerUsernameOrPin": "string", "action": "DISCOUNT_THRESHOLD|REFUND|VOID|STOCK_OVERRIDE" }
+```
+
+→ `200 { "overrideToken": "string", "expiresInSeconds": 120 }`
+
+---
+
+## Sync (terminal ↔ server)
+
+### POST /sync/push
+
+Push a batch of queued local events. Batch size ≤ 50 events. Server ingests each event
+in its own transaction; per-event failures are reported without aborting the batch.
+
+**Role**: CASHIER (terminal session)
+
+```json
+{
+  "terminalId": "uuid",
+  "lastEventSeq": 12345,
+  "events": [
+    {
+      "idempotencyKey": "uuid",
+      "type": "SALE_COMPLETED | REFUND_PROCESSED | SALE_VOIDED | STOCK_ADJUSTMENT | AUDIT",
+      "occurredAt": "iso8601-utc",
+      "localOffsetMinutes": 420,
+      "payload": { "...": "type-specific, matches data-model.md entities" }
+    }
+  ]
+}
+```
+
+→ `200`:
+
+```json
+{
+  "results": [
+    { "idempotencyKey": "uuid", "status": "ACCEPTED", "eventSeq": 12346 },
+    { "idempotencyKey": "uuid", "status": "REPLAY", "eventSeq": 12340 },
+    { "idempotencyKey": "uuid", "status": "REJECTED", "error": { "code": "string", "message": "string" } }
+  ],
+  "serverEventSeq": 12390
+}
+```
+
+**Error codes**: `DUPLICATE_REFUND` (FR-026a), `INVALID_ADJUSTMENT` (FR-033),
+`STALE_TAX_RULE`, `UNKNOWN_PRODUCT`, `SCHEMA_VIOLATION`.
+
+**Contract test requirements**: duplicate push of the same batch returns REPLAY for all;
+500-event backlog drains in ≤ 10 batches; a mid-batch server crash resumes without
+duplication.
+
+### GET /sync/pull?sinceSeq={n}
+
+Pull catalog/config changes since a sequence number. **Role**: CASHIER.
+
+→ `200`:
+
+```json
+{
+  "serverEventSeq": 12390,
+  "changes": {
+    "products": [ { "...": "Product entity, full snapshot per change" } ],
+    "categories": [ { "...": "Category entity" } ],
+    "taxRules": [ { "...": "TaxRule entity" } ],
+    "discounts": [ { "...": "Discount entity" } ],
+    "users": [ { "id": "uuid", "role": "...", "isActive": true } ]
+  }
+}
+```
+
+**Conflict rule**: catalog/config is server-authoritative; the terminal snapshot is
+replaced wholesale per entity (research §2). Financial events never flow down this
+endpoint.
+
+---
+
+## Catalog & Operations (online paths)
+
+### POST /catalog/import — bulk CSV onboarding commit
+
+**Role**: MANAGER. (Parsing/validation happens client-side; this commits validated rows.)
+
+```json
+{ "products": [ { "...": "Product entity + initialStock" } ] }
+```
+
+→ `200 { "imported": 850, "rejected": 12, "rejections": [ { "row": 41, "reason": "DUPLICATE_SKU" } ] }`
+
+### GET /reports/daily-summary?date={YYYY-MM-DD}
+
+**Role**: MANAGER. → gross, discounts, net, tax, refunds, transactionCount — derived
+from the event ledger (research §11). Response includes `lastSyncedAt` watermark.
+
+### GET /reports/sales-by-product?from={date}&to={date} · GET /reports/sales-by-category?from&to
+
+**Role**: MANAGER. Ranked lists with units, revenue, refunds; category subtotals roll
+up the tree.
+
+### GET /reports/low-stock
+
+**Role**: MANAGER. Products at/below reorder threshold with onHand, threshold,
+suggestedReorder.
+
+### GET /reports/export?report={id}&format=csv
+
+**Role**: MANAGER. CSV generated from the same SQL views as on-screen reports (FR-045).
+
+### GET /sales?from&to&cashierId&method&status · GET /sales/{receiptNumber}
+
+**Role**: MANAGER (history), CASHIER (own-sales lookup for returns).
+
+### GET /health/terminal/{terminalId}
+
+**Role**: CASHIER. → `{ "backlogDepth": 0, "lastSyncedAt": "...", "clockSkewMs": 12 }`
+(Principle VIII observability).
+
+---
+
+## Versioning
+
+Breaking changes follow expand → migrate → contract across ≥ 1 release (Quality Gates).
+Terminals may run mixed versions; the server accepts both old and new request shapes
+during migration windows.
