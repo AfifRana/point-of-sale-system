@@ -13,7 +13,7 @@
 - [x] CHK005 User stories are ordered by priority: P1 (cash sale, card/split payment, returns) → P2 (catalog, inventory, discounts) → P3 (customers, reports, dashboard)
 - [x] CHK006 Edge cases are enumerated with resolutions or explicit deferral to the implementation plan
 - [x] CHK007 Requirements use RFC 2119 MUST/SHOULD language consistently
-- [x] CHK008 Requirements are numbered sequentially (FR-001 through FR-059a) with no gaps or duplicates
+- [x] CHK008 Requirements are numbered sequentially (FR-001 through FR-059a, including lettered insertions from clarification sessions) with no gaps or duplicates
 - [x] CHK009 Success criteria are measurable and technology-agnostic
 - [x] CHK010 Assumptions record reasonable defaults chosen where the user description was silent
 

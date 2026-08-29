@@ -18,6 +18,14 @@
 - Q: How should cashiers sign in at the start of their shift — personal username and password, or a quick personal PIN on a shared terminal? → A: Both — username + password for admin/manager sign-in; quick personal PIN for cashiers on shared terminals.
 - Q: When the store first adopts the system, how should the existing product catalog and stock levels be loaded in — manual entry one at a time, or bulk import from a spreadsheet? → A: Both — manual entry for day-to-day additions, plus CSV bulk import for initial onboarding.
 
+### Session 2026-08-29
+
+- Q: At the start and end of each shift, should the system track the cash in the drawer — opening float, cash drops, and a closing count that flags shortfall or surplus? → A: Full shift management — open shift with declared float, record cash drops and payouts, close shift with counted cash, system reports variance and produces a shift/Z-report.
+- Q: When a cashier steps away mid-sale or a terminal breaks with items already scanned, should the system let them park the cart and resume it later, possibly on another terminal? → A: Park and resume across terminals — a cashier suspends a numbered cart and any terminal can retrieve and complete it.
+- Q: When a customer buys something priced by weight or length, should the system accept fractional quantities such as 1.75 kg? → A: Whole units only — every product sells in integer quantities; weighed and measured goods are out of scope for v1.
+- Q: How long should the system keep customer contact details and sales records before deleting or archiving them? → A: Configurable — retention periods are store settings with sensible defaults (financial records 7 years, customer PII anonymized after 2 years of inactivity).
+- Q: Should a manager be able to override an item's price at the counter, separately from applying a defined discount? → A: Manager-authenticated price override — a manager sets a line's price with a required reason, fully audited with before/after values.
+
 ## User Scenarios & Testing *(mandatory)*
 
 <!--
@@ -222,6 +230,11 @@ An admin sees a dashboard with today's sales, transaction count, average basket,
 - What happens when a product's price is changed mid-shift? (Covered in US-4 scenario 2: new sales use the new price; historical sales are immutable.)
 - What happens when a user with a shared account leaves? (Constitution Security section: shared accounts are prohibited; individual accounts with role-based access are required.)
 - What happens when a report is generated for a period containing offline sales not yet synced? (Report shows synced data with a clear "last synced" indicator; totals are recomputed when sync completes.)
+- What happens when a cashier tries to sell before opening a shift? (Covered in FR-052g: cash sale blocked with a prompt to open a shift.)
+- What happens when the counted cash at shift close does not match the expected amount? (Covered in FR-052c: variance computed and displayed; the shift still closes, and the variance is auditable and alertable per Constitution Principle VIII.)
+- What happens when a shift is left open at the end of the day, or a terminal fails mid-shift? (Manager may close or reopen the shift with authentication per FR-052f; the original records remain immutable.)
+- What happens when a terminal breaks with a customer's items already scanned? (Covered in FR-014a: the cart is parked and retrieved from another terminal — no rescanning.)
+- What happens when two cashiers try to resume the same parked cart at once? (Covered in FR-014b: exclusive resume; the second terminal is told the cart is already in use.)
 
 ## Requirements *(mandatory)*
 
@@ -240,7 +253,7 @@ An admin sees a dashboard with today's sales, transaction count, average basket,
 **Checkout**
 
 - **FR-007**: System MUST allow cashiers to add products to a cart by barcode scan, by search (name/SKU/barcode), or by browsing the category tree.
-- **FR-008**: System MUST increment quantity when a scanned product is already in the cart, and allow manual quantity edits and line removal.
+- **FR-008**: System MUST increment quantity when a scanned product is already in the cart, and allow manual quantity edits and line removal. Quantities MUST be whole units (integers ≥ 1); fractional quantities are out of scope for v1.
 - **FR-009**: System MUST display cart subtotal, discounts, tax, and total in real time as items are added or modified.
 - **FR-010**: System MUST support cash tender with change computation, card tender, and split tender across cash and card in a single sale.
 - **FR-010a**: System MUST record each tender method and amount separately on the sale record and receipt.
@@ -248,6 +261,9 @@ An admin sees a dashboard with today's sales, transaction count, average basket,
 - **FR-012**: System MUST decrement stock on-hand for each sold item at the moment the sale completes, atomically with the sale record.
 - **FR-013**: System MUST warn when a sale quantity exceeds on-hand stock and require explicit override with manager approval, or cap the quantity, per store policy.
 - **FR-014**: System MUST allow a sale to be voided before tender with no financial or stock effect, and record the void with actor and reason.
+- **FR-014a**: System MUST allow a cashier to park (suspend) an in-progress cart, assigning it a retrievable reference, and MUST allow any terminal in the store to retrieve and complete a parked cart (Constitution Principle VIII: stuck-terminal cart handoff).
+- **FR-014b**: System MUST prevent two terminals from resuming the same parked cart simultaneously, and MUST show parked carts with their reference, item count, total, parking cashier, and age.
+- **FR-014c**: System MUST retain parked carts across terminal restart and MUST surface parked carts older than a configurable age for staff review; parking and resuming a cart MUST have no financial or stock effect until tender.
 - **FR-015**: System MUST allow a sale to be voided after tender only as a refund flow, never by deleting the original sale.
 - **FR-016**: System MUST support keyboard-only completion of the entire sale flow (scan, quantity, discount, tender, receipt) per Constitution Principle V.
 - **FR-017**: System MUST complete the checkout path with zero network calls per Constitution Principle II (offline-first); network-dependent features MUST degrade, never block.
@@ -260,6 +276,8 @@ An admin sees a dashboard with today's sales, transaction count, average basket,
 - **FR-021**: System MUST support validity windows on discounts and reject application outside the window.
 - **FR-022**: System MUST require manager authentication for discounts exceeding a configurable threshold, per policy.
 - **FR-023**: System MUST itemize each discount with type and amount on the receipt.
+- **FR-023a**: System MUST allow a manager to override the price of a cart line, requiring manager authentication and a reason, and MUST record an audit entry with the original and overridden price (Constitution Principle III).
+- **FR-023b**: System MUST show an overridden line as price-overridden at checkout and on the receipt, distinct from a discount, and MUST use the overridden price for refund computation.
 
 **Returns & Refunds**
 
@@ -287,6 +305,9 @@ An admin sees a dashboard with today's sales, transaction count, average basket,
 - **FR-038**: System MUST allow attaching a customer to a sale at checkout, linking the sale to their purchase history.
 - **FR-039**: System MUST support receipt-less returns by locating the original sale via customer purchase history.
 - **FR-040**: System MUST support customer data erasure that removes personal details while preserving anonymized financial records.
+- **FR-040a**: System MUST expose retention periods as store-configurable settings — one for financial/transaction records (default 7 years) and one for customer PII inactivity before automatic anonymization (default 2 years) — and MUST state the configured values in the admin settings screen.
+- **FR-040b**: System MUST automatically anonymize customer PII once the configured inactivity period elapses, preserving the linked sales as anonymized financial records; automatic anonymization MUST be audited.
+- **FR-040c**: System MUST support customer data export on request (portability), returning the customer's stored details and purchase history in a machine-readable file.
 
 **Sales History & Reports**
 
@@ -305,6 +326,17 @@ An admin sees a dashboard with today's sales, transaction count, average basket,
 - **FR-050**: System MUST record an audit entry (actor, timestamp, action, before/after) for every sensitive operation: price override, discount above threshold, void, refund, stock adjustment, user administration, and permission change.
 - **FR-051**: System MUST provide an admin dashboard showing today's sales total, transaction count, average basket, refund total, low-stock alert count, and top products by revenue.
 - **FR-052**: System MUST authenticate manager overrides by identifying the overriding manager, not merely prompting the cashier.
+
+**Shift & Cash Drawer Management**
+
+- **FR-052a**: System MUST allow a cashier to open a shift on a terminal by declaring the opening cash float, recording actor, terminal, and timestamp.
+- **FR-052b**: System MUST record cash drops (cash removed to a safe) and payouts during a shift, each with amount, reason, and actor.
+- **FR-052c**: System MUST allow closing a shift by entering the counted cash on hand, and MUST compute and display the variance against the expected amount (`expected = opening float + cash sales − cash refunds − cash drops + payouts`).
+- **FR-052d**: System MUST produce a shift report (Z-report) showing opening float, cash sales, card sales, refunds, drops, payouts, expected cash, counted cash, and variance — derived from the event log, not mutable state.
+- **FR-052e**: System MUST record an audit entry for every shift open, shift close, cash drop, payout, and no-sale drawer open (Constitution Principle III).
+- **FR-052f**: System MUST require manager authentication to reopen a closed shift, and MUST retain the original close record as an immutable entry alongside the reopen.
+- **FR-052g**: System MUST prevent completing a cash sale on a terminal with no open shift, prompting the cashier to open one first.
+- **FR-052h**: System MUST allow shift operations to complete offline, queuing them like all other events (Constitution Principle II).
 
 **Cross-cutting (from Constitution)**
 
@@ -329,6 +361,9 @@ An admin sees a dashboard with today's sales, transaction count, average basket,
 - **Discount**: A promotion definition: type (percentage, fixed, sale price), scope (store, category, product), validity window, and approval threshold flag.
 - **Customer**: A person record with name, phone, email, and linked purchase history; erasable without destroying financial records.
 - **User**: A staff account with individual identity, role (admin, manager, cashier), and status; all actions attributed to a User. Admins and managers sign in with username + password; cashiers sign in with a quick personal PIN on shared terminals.
+- **Shift**: A cashier's session of drawer accountability on a terminal: opening float, open/close timestamps, opening and closing actor, counted cash at close, computed expected cash, and variance. Immutable once closed; a reopen creates a linked follow-on record.
+- **CashMovement**: An append-only record of cash entering or leaving the drawer outside of sales: type (drop, payout, no-sale open), amount, reason, actor, terminal, and timestamp, linked to its Shift.
+- **ParkedCart**: A suspended in-progress cart: retrievable reference, line items with quantities and applied discounts, parking cashier, originating terminal, and parked-at timestamp. Has no financial or stock effect; resumable from any terminal, with exclusive resume locking.
 - **AuditEntry**: A tamper-evident, append-only record of a sensitive operation: actor, terminal, timestamp (UTC + local offset), action, before/after values, and correlation ID.
 
 ## Success Criteria *(mandatory)*
@@ -346,7 +381,8 @@ An admin sees a dashboard with today's sales, transaction count, average basket,
 - **SC-009**: The system sustains a simulated 8-hour trading day at a target of 20 transactions per hour per terminal without latency budget violations.
 - **SC-010**: All role-restricted actions attempted by under-privileged users are blocked server-side with a clear denial message (100% of attempts in testing).
 - **SC-011**: Checkout remains fully functional during a simulated network outage, with zero lost sales and complete post-outage sync.
-- **SC-012**: 100% of sensitive operations (price override, threshold discount, void, refund, stock adjustment, user admin) produce an audit entry with actor and before/after values.
+- **SC-012**: 100% of sensitive operations (price override, threshold discount, void, refund, stock adjustment, user admin, shift open/close, cash drop) produce an audit entry with actor and before/after values.
+- **SC-013**: Expected drawer cash always equals opening float + cash sales − cash refunds − cash drops + payouts, verifiable on every closed shift (drawer invariant, Constitution Principle I).
 
 ## Assumptions
 
@@ -358,6 +394,8 @@ An admin sees a dashboard with today's sales, transaction count, average basket,
 - Users have stable connectivity most of the time; offline capability exists for continuity, not as the primary mode.
 - Product catalog size is small-retail scale (up to ~10,000 SKUs); enterprise-scale catalogs are out of scope.
 - Return window, discount approval threshold, and stock-override policy are store-configurable settings with sensible defaults.
+- Data retention is store-configurable: financial records default to 7 years (tax audit), customer PII to anonymization after 2 years of inactivity. Erasure never destroys financial records — PII is separable from the transaction ledger per Constitution Principle on privacy.
 - Desktop and tablet terminals are the supported form factors; mobile phones are out of scope for v1.
+- All products sell in whole units; weighed or measured goods (produce, deli, fabric) and scale peripherals are out of scope for v1. Per-product units of measure can be introduced later without invalidating existing sales data.
 - Existing infrastructure provides user authentication primitives (or the system provides its own); no SSO integration is required for v1.
 - Reports cover the listed set (daily summary, by product, by category, low-stock); advanced analytics (forecasting, basket analysis) are out of scope.
