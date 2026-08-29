@@ -35,18 +35,20 @@ Demo accounts (seeded): `admin` / `admin-pass` (ADMIN), `manager` / `manager-pas
 
 ## Scenario 1 — Cash sale with change (P1 core)
 
-**Validates**: US-1, FR-007–FR-012, SC-001, SC-003.
+**Validates**: US-1, FR-007–FR-012, FR-052g, SC-001, SC-003.
 
 1. Sign in with cashier PIN `123456` on the quick-switch screen.
-2. Scan a known barcode (fake scanner: type SKU + Enter in the search field).
-3. Verify the line renders in < 1 s with name, price, line total.
-4. Set quantity to 2; verify totals update instantly.
-5. Tender $30.00 cash on a $25.00 cart; verify change due $5.00.
-6. Confirm tender; verify receipt (number, lines, tax, tender, change) prints via fake
+2. Attempt a cash sale before opening a shift: the system blocks it and prompts to open one (FR-052g).
+3. Open a shift declaring a $200.00 opening float.
+4. Scan a known barcode (fake scanner: type SKU + Enter in the search field).
+5. Verify the line renders in < 1 s with name, price, line total.
+6. Set quantity to 2; verify totals update instantly. Confirm fractional quantities are rejected.
+7. Tender $30.00 cash on a $25.00 cart; verify change due $5.00.
+8. Confirm tender; verify receipt (number, lines, tax, tender, change) prints via fake
    printer.
-7. Check the product's stock: decremented by exactly 2.
+9. Check the product's stock: decremented by exactly 2.
 
-**Pass**: all seven checks hold; `npm run verify` money-invariant suite passes.
+**Pass**: all nine checks hold; `npm run verify` money-invariant suite passes.
 
 ## Scenario 2 — Offline sale and sync (Constitution Principle II)
 
@@ -115,6 +117,53 @@ replay verified by re-pushing the same batch).
 3. Verify receipt queued; fix printer; reprint from the receipt queue.
 
 **Pass**: tender never blocked; receipt recoverable without restarting.
+
+## Scenario 8 — Shift close with drawer variance (Constitution Principle I)
+
+**Validates**: FR-052a–e, SC-013.
+
+1. Open a shift with a $200.00 declared float.
+2. Complete three cash sales totalling $85.50 and one card sale of $40.00.
+3. Record a cash drop of $100.00 to the safe with reason "mid-day drop".
+4. Close the shift entering counted cash of $185.00.
+5. Verify expected cash = $200.00 + $85.50 − $100.00 = $185.50, and variance = −$0.50.
+6. Open the Z-report: verify opening float, cash sales, card sales, drops, expected,
+   counted, and variance are all present and the card sale is excluded from expected cash.
+7. Drop the report caches and re-run: figures must be identical (ledger-derived).
+
+**Pass**: the drawer invariant holds to the cent; variance is surfaced, not hidden.
+
+```bash
+npm run test:integration -- --grep "drawer invariant"
+```
+
+## Scenario 9 — Park a cart and resume on another terminal (Principle VIII)
+
+**Validates**: FR-014a–c.
+
+1. On Terminal A, scan three items, then park the cart; note the reference (e.g. `P-042`).
+2. Verify the cart list shows the reference, item count, total, cashier, and age.
+3. On Terminal B, retrieve `P-042`; verify all three lines and any discounts are intact.
+4. While Terminal B holds it, attempt to resume `P-042` on Terminal A: expect a clear
+   "already in use on Terminal B" message, not a silent duplicate.
+5. Restart Terminal A's browser; verify parked carts still appear.
+6. Complete the sale on Terminal B; verify stock decrements once, not twice.
+
+**Pass**: exclusive resume enforced; no financial or stock effect until tender.
+
+## Scenario 10 — Manager price override (Principle III)
+
+**Validates**: FR-023a–b.
+
+1. As cashier, add an item priced $50.00 and request a price override to $35.00.
+2. Verify manager authentication is required and a reason is mandatory.
+3. Authenticate as manager with reason "damaged packaging"; verify the line shows as
+   price-overridden, distinct from a discount, and the receipt reflects it.
+4. Complete the sale, then refund that line: verify the refund is $35.00, not $50.00.
+5. Check the audit log: a `PRICE_OVERRIDE` entry exists with before ($50.00) and after
+   ($35.00) values and the approving manager's identity.
+
+**Pass**: override audited with before/after; refund uses the overridden price.
 
 ---
 

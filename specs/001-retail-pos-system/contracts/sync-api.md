@@ -68,7 +68,7 @@ in its own transaction; per-event failures are reported without aborting the bat
   "events": [
     {
       "idempotencyKey": "uuid",
-      "type": "SALE_COMPLETED | REFUND_PROCESSED | SALE_VOIDED | STOCK_ADJUSTMENT | AUDIT",
+      "type": "SALE_COMPLETED | REFUND_PROCESSED | SALE_VOIDED | STOCK_ADJUSTMENT | SHIFT_OPENED | SHIFT_CLOSED | CASH_MOVEMENT | AUDIT",
       "occurredAt": "iso8601-utc",
       "localOffsetMinutes": 420,
       "payload": { "...": "type-specific, matches data-model.md entities" }
@@ -91,11 +91,18 @@ in its own transaction; per-event failures are reported without aborting the bat
 ```
 
 **Error codes**: `DUPLICATE_REFUND` (FR-026a), `INVALID_ADJUSTMENT` (FR-033),
-`STALE_TAX_RULE`, `UNKNOWN_PRODUCT`, `SCHEMA_VIOLATION`.
+`STALE_TAX_RULE`, `UNKNOWN_PRODUCT`, `SCHEMA_VIOLATION`, `NO_OPEN_SHIFT` (FR-052g),
+`SHIFT_ALREADY_CLOSED`, `FRACTIONAL_QUANTITY` (FR-008 — quantities must be integers ≥ 1).
+
+**Shift event payloads**: `SHIFT_OPENED` carries `{ shiftId, terminalId, openedById,
+openingFloatMinor }`. `SHIFT_CLOSED` carries `{ shiftId, closedById, countedCashMinor }` —
+the server derives `expectedCashMinor` and `varianceMinor` from the ledger and returns them,
+never trusting a client-supplied expected value. `CASH_MOVEMENT` carries
+`{ shiftId, type, amountMinor, reason }`.
 
 **Contract test requirements**: duplicate push of the same batch returns REPLAY for all;
 500-event backlog drains in ≤ 10 batches; a mid-batch server crash resumes without
-duplication.
+duplication; a cash `SALE_COMPLETED` without an open shift is REJECTED with `NO_OPEN_SHIFT`.
 
 ### GET /sync/pull?sinceSeq={n}
 
@@ -111,7 +118,8 @@ Pull catalog/config changes since a sequence number. **Role**: CASHIER.
     "categories": [ { "...": "Category entity" } ],
     "taxRules": [ { "...": "TaxRule entity" } ],
     "discounts": [ { "...": "Discount entity" } ],
-    "users": [ { "id": "uuid", "role": "...", "isActive": true } ]
+    "users": [ { "id": "uuid", "role": "...", "isActive": true } ],
+    "storeSettings": [ { "...": "StoreSettings entity — retention, thresholds, policies" } ]
   }
 }
 ```
@@ -119,6 +127,84 @@ Pull catalog/config changes since a sequence number. **Role**: CASHIER.
 **Conflict rule**: catalog/config is server-authoritative; the terminal snapshot is
 replaced wholesale per entity (research §2). Financial events never flow down this
 endpoint.
+
+---
+
+## Shifts & Cash Drawer
+
+### GET /shifts/current?terminalId={uuid}
+
+**Role**: CASHIER. → the open shift for that terminal, or `204` if none (checkout blocks
+cash sales until one is opened, FR-052g).
+
+### GET /shifts/{shiftId}/report
+
+**Role**: MANAGER (own shift: CASHIER). → Z-report derived from the event ledger:
+
+```json
+{
+  "shiftId": "uuid",
+  "openedAt": "iso8601-utc", "closedAt": "iso8601-utc",
+  "openingFloatMinor": 20000,
+  "cashSalesMinor": 145030, "cardSalesMinor": 302500,
+  "cashRefundsMinor": 1200, "dropsMinor": 100000, "payoutsMinor": 0,
+  "expectedCashMinor": 63830, "countedCashMinor": 63500, "varianceMinor": -330,
+  "transactionCount": 47
+}
+```
+
+**Contract test**: `expectedCashMinor` MUST equal `openingFloat + cashSales − cashRefunds
+− drops + payouts` (drawer invariant, SC-013), and MUST be recomputable from the ledger
+alone with caches dropped.
+
+### POST /shifts/{shiftId}/reopen
+
+**Role**: MANAGER (requires `overrideToken`). Creates a new Shift linked via
+`reopenedFromId`; the original closed shift is never mutated (FR-052f).
+
+---
+
+## Parked Carts
+
+### POST /parked-carts
+
+**Role**: CASHIER. Park an in-progress cart; returns its retrieval `reference`.
+
+```json
+{ "id": "uuid", "lines": [ { "productId": "uuid", "quantity": 2, "...": "discounts, overrides" } ], "customerId": null }
+```
+
+→ `201 { "reference": "P-042" }`
+
+### GET /parked-carts
+
+**Role**: CASHIER. → list of `PARKED` carts with reference, item count, total, parking
+cashier, and age (FR-014b).
+
+### POST /parked-carts/{reference}/resume
+
+**Role**: CASHIER. Acquires the exclusive resume lock for the calling terminal.
+
+→ `200 { "...": "cart lines and metadata", "resumeLockExpiresAt": "iso8601-utc" }`
+→ `409 { "error": { "code": "CART_IN_USE", "message": "Cart P-042 is open on Terminal 2" } }` (FR-014b)
+
+**Contract test**: two concurrent resume requests for the same reference — exactly one
+succeeds, the other receives `409 CART_IN_USE`. An expired lock lease is reclaimable so a
+crashed terminal cannot strand a cart.
+
+---
+
+## Customer Data Rights
+
+### POST /customers/{id}/anonymize
+
+**Role**: MANAGER. Removes PII, preserves anonymized financial records, emits a
+`PII_ANONYMIZED` audit entry (FR-040).
+
+### GET /customers/{id}/export
+
+**Role**: MANAGER. → machine-readable file of stored details and purchase history;
+emits a `CUSTOMER_EXPORT` audit entry (FR-040c).
 
 ---
 
@@ -148,6 +234,11 @@ up the tree.
 
 **Role**: MANAGER. Products at/below reorder threshold with onHand, threshold,
 suggestedReorder.
+
+### GET /reports/drawer-variance?from={date}&to={date}
+
+**Role**: MANAGER. Per-shift expected vs. counted cash with variance, for the
+drawer-variance alerting threshold required by Constitution Principle VIII.
 
 ### GET /reports/export?report={id}&format=csv
 

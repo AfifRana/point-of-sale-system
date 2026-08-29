@@ -279,16 +279,144 @@ confirm-before-commit step prevents a bad spreadsheet from corrupting the catalo
 
 ---
 
-## 13. Testing Strategy Summary
+## 13. Shift & Drawer Accountability (added 2026-08-29)
 
+**Decision**: A `Shift` is a first-class append-only record scoped to one terminal:
+opening float, cash movements (drops, payouts, no-sale opens), and a close carrying the
+counted cash. `expectedCashMinor` and `varianceMinor` are **always derived server-side
+from the event ledger** — the client never supplies an expected figure. Cash sales are
+gated on an open shift; card-only sales are not. At most one open shift per terminal.
+Reopen creates a new linked Shift and never mutates the closed one.
+
+**Rationale**: Constitution Principle I requires the release suite to prove
+`drawer expected = opening float + cash in − cash out`; that invariant is meaningless
+unless the expected value is computed from immutable events rather than stored state.
+Principle III forbids mutating historical financial records, which forces the
+reopen-as-new-record design. Gating only *cash* sales keeps card-only lanes usable
+without shift ceremony.
+
+**Alternatives considered**:
+- *Store-wide shifts instead of per-terminal*: cannot attribute a drawer variance to a
+  specific drawer or cashier, defeating the purpose. Rejected.
+- *Client-computed expected cash*: a terminal could under-report a shortfall; violates
+  Principle I's "money is sacred" posture. Rejected.
+- *Mutable shift record updated on close*: violates Principle III append-only rule.
+  Rejected.
+- *Gating all sales on an open shift*: unnecessary friction for card-only transactions.
+  Rejected.
+
+---
+
+## 14. Parked Carts & Cross-Terminal Handoff (added 2026-08-29)
+
+**Decision**: A `ParkedCart` is **explicitly not a ledger event** — it carries no
+financial or stock effect until tender. It is persisted in IndexedDB and synced to the
+server so any terminal can list and retrieve it. Exclusive resume uses a **lock lease**
+(`resumeLockTerminalId` + `resumeLockExpiresAt`): a resuming terminal acquires the lease,
+and an expired lease is reclaimable so a crashed terminal cannot strand a customer's
+basket. Concurrent resume attempts receive `409 CART_IN_USE`.
+
+**Rationale**: Principle VIII mandates a "stuck-terminal handoff of an in-progress cart"
+recovery path. Keeping parked carts out of the financial ledger is essential — a parked
+cart is a UI convenience, and admitting it to the append-only ledger would pollute
+reports with non-transactions. The lease (rather than a permanent lock) is what makes the
+recovery path actually recover: a hard lock held by a dead terminal would be the very
+failure mode the principle exists to prevent.
+
+**Alternatives considered**:
+- *Local-only parking (no server sync)*: fails the cross-terminal handoff requirement —
+  a broken terminal's cart would be unreachable. Rejected.
+- *Permanent exclusive lock with manual admin release*: turns a crash into a support
+  ticket. Rejected.
+- *Treating parked carts as draft sales in the ledger*: contaminates the immutable
+  financial record with non-financial state. Rejected.
+
+---
+
+## 15. Price Override vs. Discount (added 2026-08-29)
+
+**Decision**: A manager price override is modeled **on the SaleLine**, distinct from
+discounts: `priceOverriddenFromMinor` (original), `priceOverrideReason`, and
+`priceOverrideApproverId`. `unitPriceMinor` holds the overridden price, so all downstream
+computation — tax, line total, and refund amount — flows from it naturally. Every
+override emits a `PRICE_OVERRIDE` audit entry with before/after values.
+
+**Rationale**: The constitution already names price override an individually auditable
+sensitive operation, and FR-050 required the audit entry before any feature produced one —
+this closes that gap. Keeping override separate from discount matters for reporting:
+a manager needs to distinguish "we ran a promotion" from "we discounted damaged goods,"
+and conflating them would hide margin leakage.
+
+**Alternatives considered**:
+- *Modeling override as an ad-hoc discount*: loses the audit distinction and corrupts
+  discount-effectiveness reporting. Rejected.
+- *Cashier override within a percentage limit*: adds a second policy threshold and a
+  second approval path for marginal benefit; the clarification chose manager-only.
+  Rejected for v1.
+
+---
+
+## 16. Retention & Data Rights (added 2026-08-29)
+
+**Decision**: Two independent retention settings live in `StoreSettings`:
+`financialRetentionYears` (default 7) and `piiInactivityAnonymizeYears` (default 2). A
+scheduled job anonymizes customer PII once inactivity exceeds the threshold, emitting a
+`PII_ANONYMIZED` audit entry; the linked sales survive as anonymized financial records.
+Customer export (`GET /customers/{id}/export`) satisfies portability requests and is
+itself audited.
+
+**Rationale**: Constitution's privacy clause requires an explicit retention schedule plus
+export and erasure support, while simultaneously forbidding erasure from destroying
+financial records. Two separate periods are the only way to honor both: tax law wants the
+transaction kept, privacy law wants the person forgotten. The existing PII/ledger
+separation is precisely what makes independent periods implementable.
+
+**Alternatives considered**:
+- *Single retention period for everything*: either deletes tax records too early or holds
+  PII far too long. Rejected.
+- *Hardcoded periods*: violates Principle VII's "configuration, never code branches" and
+  blocks deployment to a different regulatory regime. Rejected.
+- *Manual-only erasure*: fails the "explicit retention schedule" requirement — a schedule
+  nobody enforces is not a schedule. Rejected.
+
+---
+
+## 17. Whole-Unit Quantities (added 2026-08-29)
+
+**Decision**: `quantity` on SaleLine, RefundLine, and cart lines is an integer ≥ 1.
+Fractional quantities, unit-of-measure metadata, and scale peripherals are out of scope
+for v1. The sync API rejects fractional quantities with `FRACTIONAL_QUANTITY`.
+
+**Rationale**: Constraining quantity to integers removes an entire class of rounding
+interaction — `unitPrice × fractionalQty` with tax in two modes and pro-rata refunds
+multiplies the money test matrix substantially, and Principle I demands that matrix be
+fully covered. The spec describes general small retail with no weighed goods. Adding a
+per-product unit of measure later is additive (new nullable column, new port for the
+scale) and does not invalidate existing sales rows.
+
+**Alternatives considered**:
+- *Decimal quantity everywhere now*: pays the full rounding-complexity cost for a
+  capability no current requirement needs (YAGNI, per Quality Gates). Rejected.
+- *Per-product unit of measure with a ScalePort*: the right eventual design, but
+  speculative for v1 and would expand the money-invariant suite before the core is
+  proven. Deferred, with the data model kept additive-friendly.
+
+---
+
+## 18. Testing Strategy Summary
 **Decision**: Four suites, all blocking in CI: (1) Vitest unit/table-driven domain tests
-(money, pricing, tax both modes, discount stacking, tender/change, refund eligibility —
-including zero, negative, max-qty, mixed-rate, boundary cases); (2) contract tests for
-the sync API and every peripheral port (fake vs. interface); (3) integration tests for
-offline→online sync, mid-transaction power loss (IndexedDB transaction replay),
-duplicate-request replay, concurrent catalog edits; (4) Playwright E2E checkout with the
+(money, pricing, tax both modes, discount stacking, tender/change, refund eligibility,
+drawer expected-cash — including zero, negative, max-qty, mixed-rate, boundary cases);
+(2) contract tests for the sync API and every peripheral port (fake vs. interface),
+including `NO_OPEN_SHIFT` rejection and concurrent parked-cart resume returning
+`409 CART_IN_USE`; (3) integration tests for offline→online sync, mid-transaction power
+loss (IndexedDB transaction replay), duplicate-request replay, concurrent catalog edits,
+and shift close/reopen immutability; (4) Playwright E2E checkout with the
 FakePeripheralSet, plus latency-budget performance checks (scan-to-render p95 < 100 ms,
 tender-to-receipt p95 < 500 ms).
+
+The money-invariant suite asserts three invariants, not two: order totals, tender/change,
+**and drawer expected-cash** (SC-013).
 
 **Rationale**: Principle IV is non-negotiable; the suites map one-to-one onto its
 requirements. Table-driven tests are the only affordable way to cover retail's

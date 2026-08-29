@@ -404,7 +404,7 @@ Web application structure per [plan.md](./plan.md): `backend/src/`, `frontend/sr
 - [ ] T185 [P] Implement audit chain verification job in `backend/src/services/audit-verify.ts` recomputing the hash chain on a schedule and alerting on any break
 - [ ] T186 [P] Implement locale and currency formatting module in `frontend/src/app/i18n.ts` with all user-facing strings externalized and no concatenated sentence fragments (Principle VII)
 - [ ] T187 [P] Add accessibility audit test in `frontend/tests/e2e/accessibility.spec.ts` asserting WCAG 2.1 AA contrast, 44 px touch targets, and keyboard reachability of every sale-flow step
-- [ ] T188 Run the complete quickstart.md validation — all 7 scenarios plus latency budgets — and record results
+- [ ] T188 Run the complete quickstart.md validation — all 10 scenarios plus latency budgets — and record results
 - [ ] T189 Verify the full CI gate set passes: unit, integration, contract, money-invariant, offline-sync, hardware-fake, dependency scan, latency budgets, migration up/down
 - [ ] T190 [P] Update `README.md` with project overview, setup instructions, and links to spec, plan, and runbook
 
